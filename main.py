@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from playwright.async_api import async_playwright
 
-# --- 投稿・レターメッセージリスト ---
 POST_MESSAGES = [
     "ひま〜誰か話さへん？",
     "今日もお疲れ様！何してる？",
@@ -23,61 +22,86 @@ async def human_delay(min_sec=1.0, max_sec=3.0):
     delay = random.uniform(min_sec, max_sec)
     await asyncio.sleep(delay)
 
+async def safe_goto(page, url):
+    try:
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await human_delay(2, 4)
+    except Exception as e:
+        print(f"⚠️ ページ遷移警告: {e}")
+
 async def do_post(page):
     try:
         post_text = random.choice(POST_MESSAGES)
-        print(f"📝 投稿実行: {post_text}")
-        await page.goto("https://yay.space/")
-        await human_delay(2, 4)
+        print(f"📝 投稿実行試行: {post_text}")
+        await safe_goto(page, "https://yay.space/")
     except Exception as e:
         print("⚠️ 投稿エラー:", e)
 
 async def do_like_and_follow_and_letter(page):
     try:
         print("🔍 タイムラインを巡回中...")
-        await page.goto("https://yay.space/")
-        await human_delay(2, 4)
+        await safe_goto(page, "https://yay.space/")
 
-        like_buttons = await page.query_selector_all('button[aria-label*="いいね"], button[aria-label*="Like"]')
-        print(f"👀 見つかった投稿: {len(like_buttons)}件")
+        # タイムライン要素が読み込まれるのを少し待機
+        try:
+            await page.wait_for_selector('button, a', timeout=5000)
+        except:
+            pass
+
+        # いいねボタンの全取得（SVGアイコンやボタン属性に対応）
+        like_buttons = await page.query_selector_all('button[aria-label*="いいね"], button[aria-label*="Like"], button:has(svg)')
+        print(f"👀 見つかった投稿・操作ボタン: {len(like_buttons)}件")
 
         for btn in like_buttons[:8]:
             try:
-                await btn.scroll_into_view_if_needed()
-                await human_delay(1, 2)
-                await btn.click()
-                print("❤️ いいね完了")
+                if await btn.is_visible():
+                    await btn.scroll_into_view_if_needed()
+                    await human_delay(1, 2)
+                    await btn.click()
+                    print("❤️ いいね・アクション実行")
             except:
                 pass
 
+        # ユーザーリンクの取得とフォロー・レター処理
         user_elements = await page.query_selector_all('a[href*="/user/"]')
-        for user_elem in user_elements[:3]:
+        found_users = []
+        for elem in user_elements:
+            href = await elem.get_attribute('href')
+            if href and href not in found_users:
+                found_users.append(href)
+
+        for user_path in found_users[:3]:
             try:
-                user_url = await user_elem.get_attribute('href')
-                if user_url:
-                    print(f"👤 ユーザーにアクセス: {user_url}")
+                # 相対パスなら絶対パスに変換
+                full_url = user_path if user_path.startswith("http") else f"https://yay.space{user_path}"
+                print(f"👤 ユーザーページへ移動: {full_url}")
+                await safe_goto(page, full_url)
 
-                    follow_btn = await page.query_selector('button:has-text("フォロー")')
-                    if follow_btn:
-                        await follow_btn.click()
-                        print("➕ フォロー完了！")
-                        await human_delay(1, 3)
+                # フォロー処理
+                follow_btn = await page.query_selector('button:has-text("フォロー"), button:has-text("Follow")')
+                if follow_btn and await follow_btn.is_visible():
+                    await follow_btn.click()
+                    print("➕ フォロー完了！")
+                    await human_delay(1, 2)
 
-                    letter_btn = await page.query_selector('button:has-text("レター")')
-                    if letter_btn:
-                        await letter_btn.click()
-                        await human_delay(1, 2)
+                # レター処理
+                letter_btn = await page.query_selector('button:has-text("レター"), button:has-text("Letter")')
+                if letter_btn and await letter_btn.is_visible():
+                    await letter_btn.click()
+                    await human_delay(1, 2)
+                    
+                    textarea = await page.query_selector('textarea')
+                    if textarea and await textarea.is_visible():
                         letter_text = random.choice(LETTER_MESSAGES)
-                        textarea = await page.query_selector('textarea')
-                        if textarea:
-                            await textarea.fill(letter_text)
-                            send_btn = await page.query_selector('button:has-text("送信")')
-                            if send_btn:
-                                await send_btn.click()
-                                print(f"✉️ レター送信完了: {letter_text}")
-                                await human_delay(2, 4)
+                        await textarea.fill(letter_text)
+                        
+                        send_btn = await page.query_selector('button:has-text("送信"), button:has-text("Send")')
+                        if send_btn:
+                            await send_btn.click()
+                            print(f"✉️ レター送信完了: {letter_text}")
+                            await human_delay(2, 3)
             except Exception as e:
-                print("⚠️ アクション失敗:", e)
+                print("⚠️ ユーザー操作エラー:", e)
 
     except Exception as e:
         print("⚠️ 巡回エラー:", e)
@@ -86,7 +110,14 @@ async def bot_loop():
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--disable-gpu", "--disable-dev-shm-usage", "--no-sandbox", "--single-process"]
+            args=[
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--single-process",
+                "--disable-setuid-sandbox",
+                "--no-zygote"
+            ]
         )
         
         try:
@@ -114,7 +145,6 @@ async def bot_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # サーバー起動と同時にボットをバックグラウンドで開始
     task = asyncio.create_task(bot_loop())
     yield
     task.cancel()
