@@ -1,20 +1,10 @@
 import asyncio
 import random
 import os
-import uvicorn
 from fastapi import FastAPI
 from playwright.async_api import async_playwright
 
-# --- RenderのWeb Service用ダミーサーバー設定 ---
 app = FastAPI()
-
-@app.get("/")
-def read_root():
-    return {"status": "ok", "bot": "running"}
-
-def start_dummy_server():
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
 
 # --- 投稿・レターメッセージリスト ---
 POST_MESSAGES = [
@@ -123,13 +113,10 @@ async def bot_loop():
             print(f"⏳ 次の高速巡回まで {int(wait_time)} 秒待機...")
             await asyncio.sleep(wait_time)
 
-async def main():
-    # ダミーWebサーバーを別タスクで同時起動
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, start_dummy_server)
-    
-    # ボット本体を起動
-    await bot_loop()
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(bot_loop())
 
-if __name__ == "__main__":
-    asyncio.run(main())
+@app.get("/")
+def read_root():
+    return {"status": "ok", "bot": "running"}
