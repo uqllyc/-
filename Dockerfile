@@ -1,5 +1,8 @@
 FROM mcr.microsoft.com/playwright/python:v1.62.0-jammy
 
+# ログを遅延なくリアルタイムで表示させる設定
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 COPY requirements.txt .
