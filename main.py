@@ -1,10 +1,9 @@
 import asyncio
 import random
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from playwright.async_api import async_playwright
-
-app = FastAPI()
 
 # --- 投稿・レターメッセージリスト ---
 POST_MESSAGES = [
@@ -113,9 +112,14 @@ async def bot_loop():
             print(f"⏳ 次の高速巡回まで {int(wait_time)} 秒待機...")
             await asyncio.sleep(wait_time)
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(bot_loop())
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # サーバー起動と同時にボットをバックグラウンドで開始
+    task = asyncio.create_task(bot_loop())
+    yield
+    task.cancel()
+
+app = FastAPI(lifespan=lifespan)
 
 @app.get("/")
 def read_root():
