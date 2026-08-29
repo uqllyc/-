@@ -24,7 +24,7 @@ async def human_delay(min_sec=1.0, max_sec=3.0):
 
 async def safe_goto(page, url):
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(url, wait_until="networkidle", timeout=30000)
         await human_delay(2, 4)
     except Exception as e:
         print(f"⚠️ ページ遷移警告: {e}")
@@ -42,24 +42,46 @@ async def do_like_and_follow_and_letter(page):
         print("🔍 タイムラインを巡回中...")
         await safe_goto(page, "https://yay.space/")
 
-        # タイムライン要素が読み込まれるのを少し待機
-        try:
-            await page.wait_for_selector('button, a', timeout=5000)
-        except:
-            pass
+        # ページのレンダリング待ちとスクロール（動的読み込み用）
+        await asyncio.sleep(3)
+        await page.mouse.wheel(0, 500)
+        await asyncio.sleep(2)
 
-        # いいねボタンの全取得（SVGアイコンやボタン属性に対応）
-        like_buttons = await page.query_selector_all('button[aria-label*="いいね"], button[aria-label*="Like"], button:has(svg)')
-        print(f"👀 見つかった投稿・操作ボタン: {len(like_buttons)}件")
+        # 広範囲の判定でボタン・クリック可能要素を取得
+        # 1. buttonタグ全般 2. svgを含む要素 3. 特定のクラスや属性を持つ要素
+        all_buttons = await page.query_selector_all('button, div[role="button"], a[role="button"]')
+        print(f"👀 見つかったボタン・操作要素数: {len(all_buttons)}件")
 
-        for btn in like_buttons[:8]:
+        # いいねボタン候補を抽出してクリック
+        like_count = 0
+        for btn in all_buttons:
             try:
-                if await btn.is_visible():
+                # 非表示のものはスキップ
+                if not await btn.is_visible():
+                    continue
+
+                # ボタンのHTMLやテキストを取得して判定
+                aria = await btn.get_attribute("aria-label") or ""
+                text = await btn.inner_text() or ""
+                html = await btn.inner_html() or ""
+
+                # いいね/リアクション系の要素か、もしくはタイムライン上のアクションボタンかを判定
+                is_like_target = (
+                    "いいね" in aria or "Like" in aria or
+                    "いいね" in text or "Like" in text or
+                    "<svg" in html.lower()
+                )
+
+                if is_like_target:
                     await btn.scroll_into_view_if_needed()
                     await human_delay(1, 2)
                     await btn.click()
-                    print("❤️ いいね・アクション実行")
-            except:
+                    like_count += 1
+                    print(f"❤️ [{like_count}] アクション実行完了")
+
+                    if like_count >= 8:
+                        break
+            except Exception:
                 pass
 
         # ユーザーリンクの取得とフォロー・レター処理
@@ -67,12 +89,13 @@ async def do_like_and_follow_and_letter(page):
         found_users = []
         for elem in user_elements:
             href = await elem.get_attribute('href')
-            if href and href not in found_users:
+            if href and href not in found_users and href != "/user/":
                 found_users.append(href)
+
+        print(f"👤 見つかったユーザー数: {len(found_users)}人")
 
         for user_path in found_users[:3]:
             try:
-                # 相対パスなら絶対パスに変換
                 full_url = user_path if user_path.startswith("http") else f"https://yay.space{user_path}"
                 print(f"👤 ユーザーページへ移動: {full_url}")
                 await safe_goto(page, full_url)
@@ -89,14 +112,14 @@ async def do_like_and_follow_and_letter(page):
                 if letter_btn and await letter_btn.is_visible():
                     await letter_btn.click()
                     await human_delay(1, 2)
-                    
+
                     textarea = await page.query_selector('textarea')
                     if textarea and await textarea.is_visible():
                         letter_text = random.choice(LETTER_MESSAGES)
                         await textarea.fill(letter_text)
-                        
+
                         send_btn = await page.query_selector('button:has-text("送信"), button:has-text("Send")')
-                        if send_btn:
+                        if send_btn and await send_btn.is_visible():
                             await send_btn.click()
                             print(f"✉️ レター送信完了: {letter_text}")
                             await human_delay(2, 3)
@@ -119,7 +142,7 @@ async def bot_loop():
                 "--no-zygote"
             ]
         )
-        
+
         try:
             context = await browser.new_context(storage_state="state.json")
             print("✅ state.json 読み込み完了")
@@ -145,7 +168,7 @@ async def bot_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(bot_loop())
+    task = asyncio.task = asyncio.create_task(bot_loop())
     yield
     task.cancel()
 
